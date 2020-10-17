@@ -160,6 +160,7 @@ proc asyncGetRow*(pool:AsyncPool,
       result = await asyncGetRow(pool.conns[conIdx], sql sqlString, args)
       pool.returnConn(conIdx)
     else:
+      echo "Fail" & $cpuTime()
       return newJNull()
 
 
@@ -255,3 +256,5 @@ proc asyncExec*(pool:AsyncPool,
     let conIdx = await process
     await asyncExec(pool.conns[conIdx], sql sqlString, args)
     pool.returnConn(conIdx)
+  else:
+      echo "Fail" & $cpuTime()
