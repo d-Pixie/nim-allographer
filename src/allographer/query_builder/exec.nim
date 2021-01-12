@@ -178,6 +178,10 @@ proc orm(rows:openArray[JsonNode], typ:typedesc):seq[typ.type] =
 proc orm(row:JsonNode, typ:typedesc):typ.type =
   return row.to(typ)
 
+# ==================== async sqlite ====================
+when getDriver() == "sqlite":
+  discard
+
 # ==================== async pg ====================
 when getDriver() == "postgres":
   proc asyncGet*(this: RDB): Future[seq[JsonNode]] {.async.} =
