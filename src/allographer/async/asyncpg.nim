@@ -16,6 +16,8 @@ type
 
 # open(connection, user, password, database)
 
+const errorConnectionNum = 99999
+
 proc asyncOpen*(
     connection,
     user,
@@ -44,8 +46,8 @@ proc getFreeConn(self:AsyncConnections):Future[int] {.async.} =
         return i
     await sleepAsync(10)
     if getTime().toUnix() >= calledAt + self.timeout:
-      echo "timeout"
-      break
+      echo "getFreeConn timeout"
+      return errorConnectionNum
 
 proc returnConn(self: AsyncConnections, i: int) =
   echo "=== release " & $i
@@ -93,18 +95,22 @@ proc checkError(db: DbConn) =
 
 
 # ==================================================
-proc asyncGetCore(db: DbConn, query: SqlQuery, args: seq[string]):Future[(seq[Row], DbColumns)] {.async.} =
+proc asyncGetCore(db: DbConn, query: SqlQuery, args: seq[string], timeout:int):Future[(seq[Row], DbColumns)] {.async.} =
   assert db.status == CONNECTION_OK
   let success = pqsendQuery(db, dbFormat(query, args))
   if success != 1: dbError(db) # never seen to fail when async
   var dbColumns: DbColumns
   var rows = newSeq[Row]()
   await sleepAsync(0)
+  let calledAt = getTime().toUnix()
   while true:
     let success = pqconsumeInput(db)
     if success != 1: dbError(db) # never seen to fail when async
     if pqisBusy(db) == 1:
-      await sleepAsync(1)
+      if getTime().toUnix() >= calledAt + timeout:
+        echo "asyncGetCore timeout"
+        return
+      await sleepAsync(10)
       continue
     var pqresult = pqgetResult(db)
     if pqresult == nil:
@@ -122,31 +128,68 @@ proc asyncGetCore(db: DbConn, query: SqlQuery, args: seq[string]):Future[(seq[Ro
 
 proc asyncGetAllRows(self:AsyncConnections, query: SqlQuery, args: seq[string]):Future[seq[JsonNode]] {.async.} =
   let connI = await getFreeConn(self)
-  let (rows, dbColumns) = await asyncGetCore(self.pools[connI].conn, query, args)
+  if connI == errorConnectionNum:
+    return
+  let (rows, dbColumns) = await asyncGetCore(self.pools[connI].conn, query, args, self.timeout)
   self.returnConn(connI)
   let columns = getColumns(dbColumns)
   return toJson(rows, columns)
 
-proc asyncGetAllRow(self:AsyncConnections, query: SqlQuery, args: seq[string]):Future[Option[JsonNode]] {.async.} =
+proc asyncGetRow(self:AsyncConnections, query: SqlQuery, args: seq[string]):Future[Option[JsonNode]] {.async.} =
   let connI = await getFreeConn(self)
-  let (rows, dbColumns) = await asyncGetCore(self.pools[connI].conn, query, args)
+  let (rows, dbColumns) = await asyncGetCore(self.pools[connI].conn, query, args, self.timeout)
   self.returnConn(connI)
   if rows.len == 0:
     return none(JsonNode)
   let columns = getColumns(dbColumns)
   return toJson(@[rows[0]], columns)[0].some
 
+proc asyncGetAllRowsPlain(self:AsyncConnections, query: SqlQuery, args: seq[string]):Future[seq[Row]] {.async.} =
+  let connI = await getFreeConn(self)
+  let (rows, dbColumns) = await asyncGetCore(self.pools[connI].conn, query, args, self.timeout)
+  self.returnConn(connI)
+  return rows
+
 when isMainModule:
   proc main(){.async.} =
     block:
-      let conn = asyncOpen("postgres:5432", "user", "Password!", "allographer", 50, 30)
-      let sql = "select pg_sleep(5)"
+      let conn = asyncOpen("postgres:5432", "user", "Password!", "allographer", 1, 30)
+      let sql = "select * from users limit 5"
+      echo await conn.asyncGetAllRows(sql(sql), @[])
+
+    block:
+      let conn = asyncOpen("postgres:5432", "user", "Password!", "allographer", 1, 30)
+      let sql = "select * from users limit 1"
+      echo await conn.asyncGetRow(sql(sql), @[])
+
+    block:
+      let conn = asyncOpen("postgres:5432", "user", "Password!", "allographer", 1, 30)
+      let sql = "select * from users limit 5"
+      echo await conn.asyncGetAllRowsPlain(sql(sql), @[])
+
+    block:
+      # コネクション2、クエリ発行5回、スリープ3秒なので
+      # 全部で9秒で終わる
+      let conn = asyncOpen("postgres:5432", "user", "Password!", "allographer", 2, 20)
+      let sql = "select pg_sleep(3)"
       var futures = newSeq[Future[seq[JsonNode]]](5)
-      let start = cpuTime()
+      let start = getTime().toUnix()
       for i in 0..<5:
         futures[i] = conn.asyncGetAllRows(sql(sql), @[])
       echo await all(futures)
-      echo (cpuTime() - start) * 10
+      echo getTime().toUnix() - start
+
+    block:
+      # タイムアウト
+      let conn = asyncOpen("postgres:5432", "user", "Password!", "allographer", 4, 3)
+      let sql = "select pg_sleep(3)"
+      var futures = newSeq[Future[seq[JsonNode]]](5)
+      let start = getTime().toUnix()
+      for i in 0..<5:
+        futures[i] = conn.asyncGetAllRows(sql(sql), @[])
+      echo await all(futures)
+      echo getTime().toUnix() - start
+
   waitFor main()
 
 # proc asyncGetRow(db: DbConn, query: SqlQuery, args: seq[string]):Future[Option[JsonNode]] {.async.} =
