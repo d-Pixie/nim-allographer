@@ -45,7 +45,6 @@ proc setup() =
         }
       )
 
-    echo await rdb.table("users").count()
     await rdb.table("users").insert(users)
 
 
@@ -333,8 +332,9 @@ block deleteTest:
 block deleteWithWhereTest:
   setup()
   asyncBlock:
+    let id = await(rdb.table("users").where("name", "=", "user2").first()).get()["id"].getInt
     await rdb.table("users").where("name", "=", "user2").delete()
-    check await(rdb.table("users").find(2)).isSome == false
+    check await(rdb.table("users").find(id)).isSome == false
 
 block rawQueryTest:
   setup()

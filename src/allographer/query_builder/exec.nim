@@ -254,6 +254,11 @@ proc insertId(self:Rdb, sqlString:string, placeHolder:seq[string], key:string):F
     await self.conn.exec(sqlString, placeHolder)
     let (rows, _) = await self.conn.query("SELECT last_insert_rowid()")
     return rows[0][0].parseInt
+  elif self.conn.driver == MySQL:
+    self.log.logger(sqlString, placeHolder)
+    await self.conn.exec(sqlString, placeHolder)
+    let (rows, _) = await self.conn.query("SELECT LAST_INSERT_ID()")
+    return rows[0][0].parseInt
   else:
     var key = key
     wrapUpper(key, self.conn.driver)
